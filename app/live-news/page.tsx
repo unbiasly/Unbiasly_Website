@@ -1,23 +1,24 @@
 "use client";
+
 import AppStores from "@/components/custom/app-stores";
 import { Switch } from "@/components/ui/switch";
 import { cn, timeElapsed } from "@/lib/utils";
 import { Language, NewsArticlesResponse } from "@/service/api.interface";
+import { handleResponse } from "@/service/fetchClient";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
+import Image from "next/image";
+import Link from "next/link";
 import { dateFiltersData, useFilter } from "./hooks";
 import MobileFilter from "./mobile-filter";
-import Image from "next/image";
-import { handleResponse } from "@/service/fetchClient";
-import Link from "next/link";
 
 type NewsCardProps = {
-  image: string;
+  image?: string;
   title: string;
   description: string;
   date: string;
-  publisher: string;
-  publisherUrl: string;
+  publisher?: string;
+  publisherUrl?: string;
   index: number;
   language: string;
 };
@@ -32,26 +33,31 @@ const NewsCard: React.FC<NewsCardProps> = ({
   index,
   language,
 }) => {
+  const safeUrl = publisherUrl && publisherUrl.startsWith("http") ? publisherUrl : "#";
+
   return (
     <Link
-      href={publisherUrl}
-      target="_blank"
-      rel="noreferrer"
+      href={safeUrl}
+      target={safeUrl === "#" ? undefined : "_blank"}
+      rel={safeUrl === "#" ? undefined : "noreferrer"}
       className="group block border-b border-white/[0.08] pb-10 last:border-b-0"
     >
       <div className="flex items-baseline gap-4 mb-4 flex-wrap">
         <span className="mono text-[10px] tracking-[0.2em] uppercase text-white/40">
           № {String(index + 1).padStart(3, "0")}
         </span>
+
         <span className="mono text-[10px] tracking-[0.2em] uppercase text-accent">
           {timeElapsed(date, language)}
         </span>
+
         {publisher && (
           <span className="mono text-[10px] tracking-[0.15em] uppercase text-white/45 truncate">
             · {publisher}
           </span>
         )}
       </div>
+
       <div className="grid lg:grid-cols-12 gap-6 lg:gap-10">
         {image && image.startsWith("http") && (
           <div className="lg:col-span-4 relative w-full aspect-[16/10] lg:aspect-[4/3] bg-white/[0.04] overflow-hidden rounded-xl">
@@ -66,20 +72,25 @@ const NewsCard: React.FC<NewsCardProps> = ({
             />
           </div>
         )}
+
         <div
           className={cn(
             "flex flex-col justify-between",
-            image && image.startsWith("http") ? "lg:col-span-8" : "lg:col-span-12"
+            image && image.startsWith("http")
+              ? "lg:col-span-8"
+              : "lg:col-span-12"
           )}
         >
           <div>
             <h3 className="display text-2xl md:text-3xl lg:text-[36px] leading-[1.1] tracking-tight text-balance text-white group-hover:text-accent transition-colors">
               {title}
             </h3>
+
             <p className="mt-4 text-[15px] lg:text-[16px] leading-[1.55] text-white/65 text-pretty max-w-[68ch]">
               {description}
             </p>
           </div>
+
           <div className="mt-5 flex items-center gap-2 mono text-[11px] tracking-wider uppercase text-white/45 group-hover:text-accent transition-colors">
             <span>
               Read at{" "}
@@ -95,18 +106,57 @@ const NewsCard: React.FC<NewsCardProps> = ({
   );
 };
 
+const getMonthYearValue = (selectedMonth: unknown): string | undefined => {
+  if (!selectedMonth) return undefined;
+
+  if (typeof selectedMonth === "string") {
+    return selectedMonth;
+  }
+
+  if (typeof selectedMonth === "object") {
+    const month = selectedMonth as {
+      value?: string;
+      monthYear?: string;
+      label?: string;
+    };
+
+    return month.value || month.monthYear || undefined;
+  }
+
+  return undefined;
+};
+
 const useArticles = (language: Language, monthYear?: string) =>
   useInfiniteQuery({
     queryKey: ["articles", language, monthYear],
+
     queryFn: ({ pageParam }) => {
       return fetch("/live-news/api", {
         method: "POST",
-        body: JSON.stringify({ language, page: pageParam, monthYear }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          language,
+          page: pageParam,
+          monthYear,
+        }),
       }).then<NewsArticlesResponse>(handleResponse);
     },
+
     initialPageParam: 1,
-    getNextPageParam: (lastPage: NewsArticlesResponse, _, lastPageParam) =>
-      lastPage.articles.length > 0 ? lastPageParam + 1 : undefined,
+
+    getNextPageParam: (
+      lastPage: NewsArticlesResponse,
+      _,
+      lastPageParam
+    ) => {
+      if (!lastPage?.articles || lastPage.articles.length === 0) {
+        return undefined;
+      }
+
+      return lastPageParam + 1;
+    },
   });
 
 export default function LiveNews() {
@@ -119,16 +169,20 @@ export default function LiveNews() {
 
   const language = isHindiSelected ? Language.HINDI : Language.ENGLISH;
   const languageString = isHindiSelected ? "hindi" : "english";
+  const selectedMonthYear = getMonthYearValue(selectedMonth);
 
   const {
     data: newsArticlesData,
     fetchNextPage,
     isError,
     isLoading,
-  } = useArticles(language);
+    isFetchingNextPage,
+  } = useArticles(language, selectedMonthYear);
 
   const handleOnViewportEnter = (entry: IntersectionObserverEntry | null) => {
     if (!entry?.isIntersecting) return;
+    if (isLoading || isFetchingNextPage || isError) return;
+
     fetchNextPage();
   };
 
@@ -141,7 +195,10 @@ export default function LiveNews() {
   };
 
   const totalArticles =
-    newsArticlesData?.pages.reduce((acc, p) => acc + p.articles.length, 0) ?? 0;
+    newsArticlesData?.pages.reduce(
+      (acc, page) => acc + (page?.articles?.length || 0),
+      0
+    ) ?? 0;
 
   let runningIndex = 0;
 
@@ -154,6 +211,7 @@ export default function LiveNews() {
               <span className="w-1.5 h-1.5 rounded-full bg-accent pulse-dot" />
               <span>Live · Continuously updated</span>
             </div>
+
             <span className="hidden md:block">
               {isHindiSelected ? "हिंदी" : "English"} Edition
             </span>
@@ -162,9 +220,11 @@ export default function LiveNews() {
           <div className="grid lg:grid-cols-12 gap-8 items-end">
             <div className="lg:col-span-8">
               <div className="eyebrow mb-4">The Live Feed</div>
+
               <h1 className="display text-6xl md:text-8xl lg:text-[9rem] leading-[0.9] tracking-tightest">
                 Live News.
               </h1>
+
               <p className="mt-6 text-[15px] lg:text-[17px] leading-relaxed text-white/60 max-w-2xl">
                 Every story verified, summarised, and source-attributed. Switch
                 between English and Hindi, and scroll for more.
@@ -180,10 +240,12 @@ export default function LiveNews() {
               >
                 English
               </span>
+
               <Switch
                 checked={isHindiSelected}
                 onCheckedChange={onLanguageCheckChanged}
               />
+
               <span
                 className={cn(
                   "mono text-[11px] tracking-[0.2em] uppercase transition-colors",
@@ -210,6 +272,7 @@ export default function LiveNews() {
               </div>
               <div className="display text-3xl mt-1">{totalArticles}</div>
             </div>
+
             <div>
               <div className="mono text-[10px] tracking-widest uppercase text-white/40">
                 Language
@@ -218,6 +281,7 @@ export default function LiveNews() {
                 {isHindiSelected ? "HI" : "EN"}
               </div>
             </div>
+
             <div>
               <div className="mono text-[10px] tracking-widest uppercase text-white/40">
                 Source
@@ -246,6 +310,14 @@ export default function LiveNews() {
             </div>
           )}
 
+          {!isLoading && !isError && totalArticles === 0 && (
+            <div className="py-20 text-center">
+              <div className="display text-2xl text-white/50">
+                No articles found.
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-col gap-10 lg:gap-12">
             {newsArticlesData?.pages.map((page) =>
               page.articles.map((article) => {
@@ -262,10 +334,13 @@ export default function LiveNews() {
                     language={languageString}
                   />
                 );
+
                 runningIndex++;
+
                 return card;
               })
             )}
+
             <motion.div
               initial="hidden"
               whileInView="visible"
@@ -276,7 +351,9 @@ export default function LiveNews() {
                 {isError
                   ? "Failed to load more"
                   : totalArticles > 0
-                  ? "Loading more…"
+                  ? isFetchingNextPage
+                    ? "Loading more…"
+                    : "Scroll for more"
                   : ""}
               </span>
             </motion.div>
